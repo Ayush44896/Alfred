@@ -6,6 +6,7 @@ import tflearn
 import tensorflow
 import random
 import json
+import pickle
 from nltk.stem.lancaster import LancasterStemmer
 
 #Calling LancasterStemmer
@@ -15,62 +16,122 @@ stemmer = LancasterStemmer()
 with open("intents.json") as file:
     data = json.load(file)
 
-words = []
-labels = []
-docs_x = []
-docs_y = []
+try:
+    with open("data.pickle","rb") as f:
+        words, labels, training, output = pickle.load(f)
+except:
+    words = []
+    labels = []
+    docs_x = []
+    docs_y = []
 
-for intent in data['intents']:
-    for pattern in intent['patterns']:
+    for intent in data['intents']:
+        for pattern in intent['patterns']:
 
-        #Split Patterns into words
-        wrds = nltk.word_tokenize(pattern)
-        words.extend(wrds)
+            #Split Patterns into words
+            wrds = nltk.word_tokenize(pattern)
+            words.extend(wrds)
 
-        #Creating list of patterns {docs_x} with list of corresponding tags {docs_y}
-        docs_x.append(pattern)
-        docs_y.append(intent['tag'])
+            #Creating list of patterns {docs_x} with list of corresponding tags {docs_y}
+            docs_x.append(wrds)
+            docs_y.append(intent['tag'])
 
-    #Creating list of unique tags
-    if intent["tag"] not in labels:
-        labels.append(intent['tag'])
+        #Creating list of unique tags
+        if intent["tag"] not in labels:
+            labels.append(intent['tag'])
 
-#Finding root word in tokenized words and sorting it
-words = [stemmer.stem(w.lower()) for w in words]
-words = sorted(list(set(words)))
-labels = sorted(labels)
+    #Finding root word in tokenized words and sorting it
+    words = [stemmer.stem(w.lower()) for w in words if w != '?']
+    words = sorted(list(set(words)))
+    labels = sorted(labels)
 
-training = []
-output = []
+    training = []
+    output = []
 
-#Creating a list of 0's with list length as the no. of lables
-out_empty = [0 for _ in range(len(labels))]
+    #Creating a list of 0's with list length as the no. of lables
+    out_empty = [0 for _ in range(len(labels))]
 
-for x, doc in enumerate(docs_x):
-    bag = []
+    for x, doc in enumerate(docs_x):
+        bag = []
 
-    #Stem docs_x
-    wrds = [stemmer.stem(w) for w in doc]
-    
-    #Creating a bag of words using One Hot Encoding
-    for w in words:
-        if w in wrds:
-            bag.append(1)
-        else:
-            bag.append(0)
+        #Stem docs_x
+        wrds = [stemmer.stem(w) for w in doc]
+        
+        #Creating a bag of words using One Hot Encoding
+        for w in words:
+            if w in wrds:
+                bag.append(1)
+            else:
+                bag.append(0)
 
-    #Creating a list with indexs of corresponding labels denoting 1
-    output_row = out_empty[:]
-    output_row[labels.index(docs_y[x])] = 1
+        #Creating a list with indexs of corresponding labels denoting 1
+        output_row = out_empty[:]
+        output_row[labels.index(docs_y[x])] = 1
 
-    training.append(bag)
-    output.append(output_row)
+        training.append(bag)
+        output.append(output_row)
 
-#Convert into numpy arrays for tflearn
-training = numpy.array(training)
-output = numpy.array(output)
+    #Convert into numpy arrays for tflearn
+    training = numpy.array(training)
+    output = numpy.array(output)
 
+    with open("data.pickle","wb") as f:
+        pickle.dump((words, labels, training, output), f)
 
-print(training)
-print("---------------------")
-print(output)
+tensorflow.reset_default_graph()
+
+#Define Input Shape of the Model
+net = tflearn.input_data(shape=[None, len(training[0])])
+#Add Net to the neural network with 8 nodes and two hidden layers
+net = tflearn.fully_connected(net,8)
+net = tflearn.fully_connected(net,8)
+net = tflearn.fully_connected(net,len(output[0]),activation="softmax")
+net = tflearn.regression(net)
+
+#Train the model
+model = tflearn.DNN(net)
+#try:
+    #model.load("model.tflearn")
+#except:
+model.fit(training, output, n_epoch=1000, batch_size=8, show_metric=True)
+model.save("model.tflearn")
+
+#Prediction Function
+def bag_of_words(s,words):
+    bag = [0 for _ in range(len(words))]
+    s_words = nltk.word_tokenize(s)
+    s_words = [stemmer.stem(word.lower()) for word in s_words]
+
+    for sw in s_words:
+        for i,w in enumerate(words):
+            if w == sw:
+                bag[i] = 1
+
+    return numpy.array(bag)
+
+def chat():
+    #Welcome Message
+    print("\n\nAlfred: Welcome Master Bruce!!!")
+    print("Alfred: What Tool can i help you with today?")
+
+    while True:
+        inp = input("Bruce: ")
+        
+        #End CHat
+        if inp.lower() == "thanks alfred":
+            break
+
+        #If user doesn't quit, feed the input to the model
+        results = model.predict([bag_of_words(inp, words)])
+        #Find index of the most probable node
+        results_index = numpy.argmax(results)
+        tag = labels[results_index]
+        
+        #Check if tag exists and return response
+        for tg in data["intents"]:
+            if tg['tag'] == tag:
+                responses = tg['responses']
+
+        print(random.choice(responses))
+
+chat()
